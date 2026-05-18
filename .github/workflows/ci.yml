@@ -1,8 +1,8 @@
-name: CI Pipeline
+name: CI - Lint, Tests & Coverage
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'feature/**']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -13,19 +13,19 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout du code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 20
+      - name: Setup Node.js 18
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '18'
           cache: 'npm'
 
       - name: Installation des dependances
         run: npm ci
 
-      - name: Lint ESLint
+      - name: Verification ESLint
         run: npm run lint
 
   test:
@@ -33,11 +33,12 @@ jobs:
     runs-on: ubuntu-latest
 
     strategy:
+      fail-fast: false
       matrix:
         node-version: [18, 20]
 
     steps:
-      - name: Checkout du code
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Node.js ${{ matrix.node-version }}
@@ -49,13 +50,49 @@ jobs:
       - name: Installation des dependances
         run: npm ci
 
-      - name: Tests unitaires avec couverture
-        run: npm test
+      - name: Tests unitaires + couverture
+        run: npm run test:ci
+
+      - name: Resume de couverture
+        if: always()
+        run: |
+          echo '## Couverture de code - Node ${{ matrix.node-version }}' >> $GITHUB_STEP_SUMMARY
+          if [ -f coverage/coverage-summary.json ]; then
+            cat coverage/coverage-summary.json | node -e "
+              const data = JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf8'));
+              const total = data.total;
+              console.log('| Metric | Coverage |');
+              console.log('|--------|----------|');
+              console.log('| Statements | ' + total.statements.pct + '% |');
+              console.log('| Branches | ' + total.branches.pct + '% |');
+              console.log('| Functions | ' + total.functions.pct + '% |');
+              console.log('| Lines | ' + total.lines.pct + '% |');
+            " >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: Upload rapport de couverture
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: coverage-report-node-${{ matrix.node-version }}
+          name: coverage-node-${{ matrix.node-version }}
           path: coverage/
-          retention-days: 7
+          retention-days: 14
+
+  ci-success:
+    name: CI complet
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    if: always()
+
+    steps:
+      - name: Verifier que tout est vert
+        run: |
+          if [ '${{ needs.lint.result }}' != 'success' ]; then
+            echo 'Lint a echoue !'
+            exit 1
+          fi
+          if [ '${{ needs.test.result }}' != 'success' ]; then
+            echo 'Tests ont echoue !'
+            exit 1
+          fi
+          echo 'CI entierement vert'
