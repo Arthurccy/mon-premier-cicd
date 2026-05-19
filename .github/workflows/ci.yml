@@ -7,6 +7,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     name: Lint ESLint
@@ -78,21 +82,53 @@ jobs:
           path: coverage/
           retention-days: 14
 
-  ci-success:
-    name: CI complet
+  report:
+    name: Rapport Coverage
     runs-on: ubuntu-latest
     needs: [lint, test]
     if: always()
 
     steps:
-      - name: Verifier que tout est vert
+      - uses: actions/checkout@v4
+
+      - name: Telecharger tous les rapports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-node-*
+          merge-multiple: false
+          path: all-coverage/
+
+      - name: Afficher le resume dans Step Summary
         run: |
-          if [ '${{ needs.lint.result }}' != 'success' ]; then
-            echo 'Lint a echoue !'
+          echo '## Rapport de Couverture' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo '| Version | Statements | Branches | Functions | Lines |' >> $GITHUB_STEP_SUMMARY
+          echo '|---------|------------|----------|-----------|-------|' >> $GITHUB_STEP_SUMMARY
+
+          for dir in all-coverage/coverage-node-*/; do
+            version=$(basename "$dir" | sed 's/coverage-node-//')
+            summary="${dir}coverage-summary.json"
+
+            if [ -f "$summary" ]; then
+              node -e "
+                const fs = require('fs');
+                const summary = process.argv[1];
+                const version = process.argv[2];
+                const total = JSON.parse(fs.readFileSync(summary, 'utf8')).total;
+                console.log('| Node ' + version + ' | ' + total.statements.pct + '% | ' + total.branches.pct + '% | ' + total.functions.pct + '% | ' + total.lines.pct + '% |');
+              " "$summary" "$version" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+
+      - name: Resultat global CI
+        run: |
+          lint_ok='${{ needs.lint.result }}'
+          test_ok='${{ needs.test.result }}'
+          echo "Lint: $lint_ok | Tests: $test_ok"
+
+          if [ "$lint_ok" != 'success' ] || [ "$test_ok" != 'success' ]; then
+            echo 'CI echoue' >> $GITHUB_STEP_SUMMARY
             exit 1
           fi
-          if [ '${{ needs.test.result }}' != 'success' ]; then
-            echo 'Tests ont echoue !'
-            exit 1
-          fi
-          echo 'CI entierement vert'
+
+          echo 'CI complet - tous les jobs sont verts' >> $GITHUB_STEP_SUMMARY
